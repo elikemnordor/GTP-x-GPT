@@ -145,6 +145,17 @@
         const statusMsg = document.getElementById('status-message');
 
         // === STATE ===
+        // Helper: try to get rear camera (environment). If not available, fall back to front (user).
+        async function startCamera() {
+            const rearConstraints = { video: { facingMode: { exact: 'environment' } } };
+            const frontConstraints = { video: { facingMode: 'user' } };
+            try {
+                return await navigator.mediaDevices.getUserMedia(rearConstraints);
+            } catch (err) {
+                console.warn('Rear camera not available, using front camera', err);
+                return navigator.mediaDevices.getUserMedia(frontConstraints);
+            }
+        }
         let modelImageBlob = null;
         let selectedOutfitSrc = null;
         let stream = null; // holds MediaStream so we can stop it later
@@ -162,7 +173,7 @@
             if (mode === 'start' || mode === 'retake') {
                 // Request camera and start stream
                 try {
-                    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+                    stream = await startCamera();
                     videoEl.srcObject = stream;
                     // Start the video stream playback so the user can see themselves
                     videoEl.play();
