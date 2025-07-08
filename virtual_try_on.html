@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Virtual Try-On</title>
+    <!--
+        All styling is placed here to keep this file completely self-contained.
+        Mobile-first styles come first; media queries enhance the layout on larger screens.
+    -->
+    <style>
+        :root {
+            /* Client brand palette */
+            --primary: #B27F51; /* gold accent used for buttons/highlights */
+            --bg: #ffffff;     /* white background */
+            --text: #173F35;   /* dark green text */
+            --border-radius: 8px;
+        }
+
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            display: flex;
+            justify-content: center;
+            padding: 1rem;
+        }
+        .container {
+            width: 100%;
+            max-width: 480px; /* looks great on mobile, centers on desktop */
+            display: flex;
+            flex-direction: column;
+            gap: 2rem;
+        }
+        h1, h2 { margin: 0 0 0.5rem 0; text-align: center; }
+        section { background: #fff; padding: 1rem; border-radius: var(--border-radius); box-shadow: 0 2px 4px rgba(0,0,0,0.06); }
+
+        /* Step 1 */
+        video, canvas, #model-preview, #result-image {
+            width: 100%;
+            border-radius: var(--border-radius);
+            background: #e5e5e5;
+        }
+        .hidden { display: none !important; }
+        button {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            margin-top: 0.75rem;
+            border: none;
+            border-radius: var(--border-radius);
+            background: var(--primary);
+            color: #fff;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background 0.2s, opacity 0.2s;
+        }
+        /* slightly darker shades of gold for interactions */
+        button:hover { background: #96673F; }
+        button:active { background: #7A5E32; }
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        /* Outfit gallery */
+        #outfit-gallery {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            justify-content: center;
+        }
+        .outfit-choice {
+            width: calc(33.33% - 0.34rem);
+            border-radius: var(--border-radius);
+            cursor: pointer;
+            transition: transform 0.2s, border 0.2s;
+            border: 3px solid transparent;
+        }
+        .outfit-choice:hover { transform: translateY(-2px); }
+        .outfit-choice.selected { border-color: var(--primary); }
+
+        /* Status message */
+        #status-message { text-align: center; min-height: 1.25rem; }
+
+        /* Larger screens enhancements */
+        @media(min-width: 640px) {
+            .container { max-width: 640px; }
+            .outfit-choice { width: calc(25% - 0.38rem); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>A.I. Try-On</h1>
+
+        <!-- Step 1 -->
+        <section id="step1">
+            <h2>Step 1: Take Your Photo</h2>
+            <video id="camera-stream" class="hidden" playsinline></video>
+            <!-- Canvas is hidden; used only for capturing a frame -->
+            <canvas id="capture-canvas" class="hidden"></canvas>
+            <img id="model-preview" src="https://placehold.co/400x500?text=Your+Photo" alt="Model preview">
+            <button id="capture-button" data-mode="start">Start Camera</button>
+        </section>
+
+        <!-- Step 2 -->
+        <section id="step2">
+            <h2>Step 2: Choose an Outfit</h2>
+            <div id="outfit-gallery">
+                <img src="fit-1.jpg" alt="Outfit 1" class="outfit-choice">
+                <img src="Nustyle_GT05150.066.jpg" alt="Outfit 2" class="outfit-choice">
+                <img src="Adepa_Dumas_GT11323.003.jpg" alt="Outfit 3" class="outfit-choice">
+            </div>
+        </section>
+
+        <!-- Step 3 -->
+        <section id="step3">
+            <h2>Step 3: Generate Your Look</h2>
+            <button id="generate-button" disabled>Generate Look</button>
+        </section>
+
+        <!-- Result -->
+        <section id="result">
+            <h2>Your Styled Look</h2>
+            <img id="result-image" class="hidden" alt="Generated look">
+        </section>
+
+        <p id="status-message"></p>
+    </div>
+
+    <!--
+        All functional logic is placed here. No external libraries are used; only modern browser APIs.
+    -->
+    <script>
+        // === DOM ELEMENTS ===
+        const captureBtn = document.getElementById('capture-button');
+        const generateBtn = document.getElementById('generate-button');
+        const videoEl = document.getElementById('camera-stream');
+        const canvasEl = document.getElementById('capture-canvas');
+        const modelPreviewImg = document.getElementById('model-preview');
+        const outfitGallery = document.getElementById('outfit-gallery');
+        const resultImg = document.getElementById('result-image');
+        const statusMsg = document.getElementById('status-message');
+
+        // === STATE ===
+        let modelImageBlob = null;
+        let selectedOutfitSrc = null;
+        let stream = null; // holds MediaStream so we can stop it later
+
+        // === UTILITY ===
+        function checkIfReady() {
+            const ready = modelImageBlob && selectedOutfitSrc;
+            generateBtn.disabled = !ready;
+        }
+
+        // === CAMERA LOGIC ===
+        captureBtn.addEventListener('click', async () => {
+            const mode = captureBtn.dataset.mode;
+
+            if (mode === 'start' || mode === 'retake') {
+                // Request camera and start stream
+                try {
+                    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+                    videoEl.srcObject = stream;
+                    // Start the video stream playback so the user can see themselves
+                    videoEl.play();
+                    videoEl.classList.remove('hidden');
+                    captureBtn.textContent = 'Take Photo';
+                    captureBtn.dataset.mode = 'capture';
+                    // Hide preview image while camera is open
+                    modelPreviewImg.classList.add('hidden');
+                    statusMsg.textContent = '';
+                } catch (err) {
+                    console.error(err);
+                    statusMsg.textContent = 'Camera access denied. Please allow camera permissions.';
+                }
+            } else if (mode === 'capture') {
+                // Capture frame to canvas
+                const videoWidth = videoEl.videoWidth;
+                const videoHeight = videoEl.videoHeight;
+                canvasEl.width = videoWidth;
+                canvasEl.height = videoHeight;
+                const ctx = canvasEl.getContext('2d');
+                ctx.drawImage(videoEl, 0, 0, videoWidth, videoHeight);
+
+                // Create data URL for preview
+                modelPreviewImg.src = canvasEl.toDataURL('image/jpeg');
+                modelPreviewImg.classList.remove('hidden');
+
+                // Convert to Blob for API
+                canvasEl.toBlob(blob => {
+                    modelImageBlob = blob;
+                    checkIfReady();
+                }, 'image/jpeg', 0.95);
+
+                // Stop camera stream
+                stream.getTracks().forEach(track => track.stop());
+                videoEl.classList.add('hidden');
+
+                captureBtn.textContent = 'Retake Photo';
+                captureBtn.dataset.mode = 'retake';
+            }
+        });
+
+        // === OUTFIT SELECTION ===
+        outfitGallery.addEventListener('click', event => {
+            const target = event.target;
+            if (!target.classList.contains('outfit-choice')) return;
+
+            // Remove existing selections
+            document.querySelectorAll('.outfit-choice.selected').forEach(img => img.classList.remove('selected'));
+
+            // Mark selected
+            target.classList.add('selected');
+            selectedOutfitSrc = target.src;
+            checkIfReady();
+        });
+
+        // === GENERATE IMAGE ===
+        generateBtn.addEventListener('click', async () => {
+            generateBtn.disabled = true;
+            statusMsg.textContent = 'Uploading and generating... please wait.';
+            resultImg.classList.add('hidden');
+
+            try {
+                // Prepare form data
+                const formData = new FormData();
+                formData.append('product_image', modelImageBlob, 'model.jpg');
+
+                // Fetch outfit image as blob
+                const outfitResponse = await fetch(selectedOutfitSrc);
+                const outfitBlob = await outfitResponse.blob();
+                formData.append('reference_image', outfitBlob, 'outfit.jpg');
+
+                // Send to API (replace placeholder with your URL)
+                const response = await fetch('https://ttest2-304199947271.europe-west1.run.app', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    const b64String = data.generated_image_b64;
+                    const imageUrl = 'data:image/jpeg;base64,' + b64String;
+                    resultImg.src = imageUrl;
+                    resultImg.classList.remove('hidden');
+                    statusMsg.textContent = '';
+                } else {
+                    const errorText = await response.text();
+                    console.error('API Error:', errorText);
+                    statusMsg.textContent = 'Sorry, an error occurred. Please try again.';
+                }
+            } catch (err) {
+                console.error(err);
+                statusMsg.textContent = 'Network error. Please check your connection and try again.';
+            } finally {
+                generateBtn.disabled = false; // allow retries
+            }
+        });
+    </script>
+</body>
+</html>
